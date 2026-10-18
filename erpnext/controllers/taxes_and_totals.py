@@ -55,8 +55,10 @@ class calculate_taxes_and_totals:
 		self.discount_amount_applied = False
 		self.need_recomputation = False
 		self.ignore_tax_template_validation = ignore_tax_template_validation
+		self.grand_total_for_distributing_discount = 0.0
 
 		self._calculate()
+		self.calculate_shipping_charges()
 
 		if self.doc.meta.get_field("discount_amount") and not self.has_mapped_discount:
 			self.set_discount_amount()
@@ -71,8 +73,6 @@ class calculate_taxes_and_totals:
 			self.doc.base_grand_total -= self.doc.base_discount_amount
 			self.doc.rounding_adjustment = self.doc.base_rounding_adjustment = 0.0
 			self.set_rounded_total()
-
-		self.calculate_shipping_charges()
 
 		if self.doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
 			self.calculate_total_advance()
@@ -1197,7 +1197,8 @@ class calculate_taxes_and_totals:
 
 		if self.doc.redeem_loyalty_points and self.doc.loyalty_amount:
 			base_paid_amount += self.doc.loyalty_amount
-			paid_amount += self.doc.loyalty_amount / flt(self.doc.conversion_rate)
+			conversion_rate = flt(self.doc.conversion_rate) or 1.0
+			paid_amount += self.doc.loyalty_amount / conversion_rate
 
 		self.doc.paid_amount = flt(paid_amount, self.doc.precision("paid_amount"))
 		self.doc.base_paid_amount = flt(base_paid_amount, self.doc.precision("base_paid_amount"))
@@ -1350,7 +1351,13 @@ def get_itemised_tax_breakup_data(doc):
 	itemised_tax = get_itemised_tax(doc)
 	itemised_tax_data = []
 	for item_code, taxes in itemised_tax.items():
-		taxable_amount = next(iter(taxes.values())).get("taxable_amount")
+		taxable_amount = max((flt(t.get("taxable_amount")) for t in taxes.values()), default=0.0)
+		if not taxable_amount:
+			taxable_amount = sum(
+				flt(item.net_amount / (flt(doc.conversion_rate) or 1.0), doc.precision("tax_amount", "taxes"))
+				for item in doc.items
+				if (item.item_code or item.item_name) == item_code
+			)
 		itemised_tax_data.append(frappe._dict({"item": item_code, "taxable_amount": taxable_amount, **taxes}))
 
 	return itemised_tax_data
